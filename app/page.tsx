@@ -49,7 +49,7 @@ export default function Home() {
       });
 
       const encryptedResult = await analyzeCase(encryptedContent);
-      const decryptedResult = await deanonymizeText(encryptedResult);
+      const decryptedResult = await deanonymizeText(encryptedResult || "");
       setAiResult(decryptedResult);
 
       alert(`성공적으로 사건이 접수되어 1차 AI 분석이 완료되었습니다!`);
