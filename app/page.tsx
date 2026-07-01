@@ -84,7 +84,7 @@ export default function Home() {
       );
 
       // 3. AI가 지정해준 배심원단 코드(STU_XX)를 다시 친숙한 아이들 실명으로 번역! 🔓
-      const decryptedTrialReport = await deanonymizeText(encryptedTrialReport);
+      const decryptedTrialReport = await deanonymizeText(encryptedTrialReport || "");
       setTrialResult(decryptedTrialReport);
 
       alert('관계 DB 분석을 바탕으로 객관적인 정식 재판부가 구성되었습니다! 🏛️');
