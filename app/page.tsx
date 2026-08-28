@@ -1,37 +1,237 @@
 'use client';
 
-import { useState } from 'react';
+import React, { useState } from 'react';
 import { db } from '@/lib/firebase';
 import { collection, addDoc, getDocs, serverTimestamp } from 'firebase/firestore';
 import { analyzeCase, setupCourtTrial } from '@/lib/gemini';
 import { anonymizeText, getStudentIdByName, deanonymizeText } from '@/lib/anonymize';
-import AdminDashboard, { CaseRecord } from '@/components/AdminDashboard';
 
+// 🔒 관리자 모드용 사건 데이터 타입 정의
+export interface CaseRecord {
+  id: string;
+  createdAt: string;
+  plaintiff: string;
+  defendant: string;
+  title: string;
+  content: string;
+  aiAnalysis?: string;
+  juryList?: string[];
+  status: "접수완료" | "재판진행중" | "판결완료";
+}
+
+// 🔒 관리자 대시보드 컴포넌트 (내장)
+function AdminDashboard({
+  cases,
+  onDeleteCase,
+  onUpdateStatus,
+}: {
+  cases: CaseRecord[];
+  onDeleteCase?: (id: string) => void;
+  onUpdateStatus?: (id: string, status: CaseRecord["status"]) => void;
+}) {
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [inputPassword, setInputPassword] = useState("");
+  const [selectedCase, setSelectedCase] = useState<CaseRecord | null>(null);
+
+  const ADMIN_PIN = "1234";
+
+  const handleLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (inputPassword === ADMIN_PIN) {
+      setIsAuthenticated(true);
+      setInputPassword("");
+    } else {
+      alert("관리자 비밀번호가 일치하지 않습니다.");
+      setInputPassword("");
+    }
+  };
+
+  if (!isAuthenticated) {
+    return (
+      <div className="flex flex-col items-center justify-center p-8 bg-white rounded-2xl shadow-md border border-slate-200 max-w-md mx-auto my-8">
+        <div className="text-3xl mb-3">🔒</div>
+        <h2 className="text-xl font-bold text-slate-800 mb-2">교사 전용 관리자 모드</h2>
+        <p className="text-sm text-slate-500 mb-6 text-center">
+          학급 법정 사건 종합 조회를 위해 관리자 비밀번호를 입력해주세요.
+        </p>
+        <form onSubmit={handleLogin} className="w-full space-y-3">
+          <input
+            type="password"
+            placeholder="비밀번호 4자리"
+            value={inputPassword}
+            onChange={(e) => setInputPassword(e.target.value)}
+            className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          />
+          <button
+            type="submit"
+            className="w-full bg-slate-900 text-white font-medium py-2.5 rounded-lg hover:bg-slate-800 transition"
+          >
+            관리자 접속
+          </button>
+        </form>
+      </div>
+    );
+  }
+
+  return (
+    <div className="p-6 bg-slate-50 rounded-2xl border border-slate-200 shadow-sm max-w-5xl mx-auto my-8 space-y-6">
+      <div className="flex justify-between items-center border-b border-slate-200 pb-4">
+        <div>
+          <h2 className="text-2xl font-bold text-slate-800 flex items-center gap-2">
+            🏛️ 학급 법정 통합 관리 대시보드
+          </h2>
+          <p className="text-sm text-slate-500 mt-1">
+            총 <span className="font-semibold text-indigo-600">{cases.length}</span>건의 사건이 접수되어 있습니다.
+          </p>
+        </div>
+        <button
+          onClick={() => setIsAuthenticated(false)}
+          className="text-xs text-slate-500 hover:text-slate-800 bg-white border border-slate-300 px-3 py-1.5 rounded-md shadow-sm"
+        >
+          관리자 로그아웃
+        </button>
+      </div>
+
+      <div className="overflow-x-auto bg-white rounded-xl border border-slate-200 shadow-sm">
+        <table className="w-full text-left border-collapse text-sm">
+          <thead>
+            <tr className="bg-slate-100 text-slate-600 border-b border-slate-200">
+              <th className="p-3.5 font-semibold">접수일시</th>
+              <th className="p-3.5 font-semibold">신청자</th>
+              <th className="p-3.5 font-semibold">사건 개요</th>
+              <th className="p-3.5 font-semibold">상태</th>
+              <th className="p-3.5 font-semibold text-center">관리</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-100">
+            {cases.length === 0 ? (
+              <tr>
+                <td colSpan={5} className="p-8 text-center text-slate-400">
+                  현재 접수된 사건 내역이 없습니다.
+                </td>
+              </tr>
+            ) : (
+              cases.map((item) => (
+                <tr key={item.id} className="hover:bg-slate-50 transition">
+                  <td className="p-3.5 text-slate-500 text-xs">{item.createdAt}</td>
+                  <td className="p-3.5 font-medium text-slate-800">{item.plaintiff}</td>
+                  <td className="p-3.5 text-slate-700 max-w-xs truncate">{item.title}</td>
+                  <td className="p-3.5">
+                    <select
+                      value={item.status}
+                      onChange={(e) =>
+                        onUpdateStatus &&
+                        onUpdateStatus(item.id, e.target.value as CaseRecord["status"])
+                      }
+                      className="text-xs bg-slate-100 border border-slate-300 rounded px-2 py-1 font-medium focus:outline-none"
+                    >
+                      <option value="접수완료">접수완료</option>
+                      <option value="재판진행중">재판진행중</option>
+                      <option value="판결완료">판결완료</option>
+                    </select>
+                  </td>
+                  <td className="p-3.5 text-center space-x-2">
+                    <button
+                      onClick={() => setSelectedCase(item)}
+                      className="px-2.5 py-1 text-xs bg-indigo-50 text-indigo-600 font-medium rounded hover:bg-indigo-100 transition"
+                    >
+                      상세·AI분석
+                    </button>
+                    {onDeleteCase && (
+                      <button
+                        onClick={() => {
+                          if (confirm("정말 이 사건을 삭제하시겠습니까?")) {
+                            onDeleteCase(item.id);
+                          }
+                        }}
+                        className="px-2 py-1 text-xs text-rose-500 hover:bg-rose-50 rounded transition"
+                      >
+                        삭제
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+
+      {selectedCase && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-xl max-h-[85vh] overflow-y-auto space-y-4">
+            <div className="flex justify-between items-start border-b border-slate-100 pb-3">
+              <div>
+                <span className="text-xs font-semibold px-2 py-0.5 rounded bg-indigo-100 text-indigo-700">
+                  {selectedCase.status}
+                </span>
+                <h3 className="text-lg font-bold text-slate-800 mt-1">
+                  {selectedCase.title}
+                </h3>
+              </div>
+              <button
+                onClick={() => setSelectedCase(null)}
+                className="text-slate-400 hover:text-slate-600 text-xl font-bold"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="text-sm bg-slate-50 p-3.5 rounded-xl space-y-1">
+              <p><strong>신청 학생:</strong> {selectedCase.plaintiff}</p>
+              <p className="text-slate-500 text-xs mt-2"><strong>접수 일시:</strong> {selectedCase.createdAt}</p>
+            </div>
+
+            <div className="space-y-1">
+              <h4 className="text-xs font-bold text-slate-500 uppercase">사건 내용</h4>
+              <p className="text-sm text-slate-700 whitespace-pre-wrap bg-slate-50 p-3 rounded-xl border border-slate-100">
+                {selectedCase.content}
+              </p>
+            </div>
+
+            {selectedCase.aiAnalysis && (
+              <div className="space-y-1">
+                <h4 className="text-xs font-bold text-indigo-600 uppercase">🤖 AI 분석 및 재판부 리포트</h4>
+                <div className="text-sm text-slate-700 whitespace-pre-wrap bg-indigo-50/50 p-3.5 rounded-xl border border-indigo-100">
+                  {selectedCase.aiAnalysis}
+                </div>
+              </div>
+            )}
+
+            <div className="pt-2 flex justify-end">
+              <button
+                onClick={() => setSelectedCase(null)}
+                className="px-4 py-2 bg-slate-800 text-white rounded-lg text-sm font-medium hover:bg-slate-700"
+              >
+                닫기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// 🏛️ 메인 홈 컴포넌트
 export default function Home() {
   const [view, setView] = useState<'menu' | 'report' | 'friend' | 'admin'>('menu');
   const [isLoading, setIsLoading] = useState(false);
   const [aiResult, setAiResult] = useState('');
-  
-  // 정식 재판 결과창 전용 상자
   const [trialResult, setTrialResult] = useState('');
-  // 불복 버튼을 띄우기 위해 현재 신고 상태를 임시 저장할 상자들
   const [currentEncryptedContent, setCurrentEncryptedContent] = useState('');
   const [currentEncryptedReporter, setCurrentEncryptedReporter] = useState('');
 
-  // 🚨 사건 신고용 상자
   const [reporter, setReporter] = useState('');
   const [content, setContent] = useState('');
 
-  // 🤝 오늘의 마음 & 친구 기록용 상자
   const [myName, setMyName] = useState('');
   const [goodFriends, setGoodFriends] = useState('');
   const [badFriend, setBadFriend] = useState('');
   const [story, setStory] = useState('');
 
-  // 🔒 교사 전용 관리자 모드 사건 목록
   const [caseList, setCaseList] = useState<CaseRecord[]>([]);
 
-  // 🚨 사건 신고 제출
   const handleReportSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -42,7 +242,6 @@ export default function Home() {
       const encryptedReporter = await getStudentIdByName(reporter);
       const encryptedContent = await anonymizeText(content);
 
-      // 불복 시 재판 청구를 위해 상태 기억
       setCurrentEncryptedReporter(encryptedReporter);
       setCurrentEncryptedContent(encryptedContent);
 
@@ -56,12 +255,11 @@ export default function Home() {
       const decryptedResult = await deanonymizeText(encryptedResult || "");
       setAiResult(decryptedResult);
 
-      // 관리자 대시보드 목록에 새 사건 자동 등록
       const newCaseRecord: CaseRecord = {
         id: Date.now().toString(),
         createdAt: new Date().toLocaleString('ko-KR'),
         plaintiff: reporter,
-        defendant: 'AI 분석 내용 참조',
+        defendant: '분석 내용 참조',
         title: content.slice(0, 20) + (content.length > 20 ? '...' : ''),
         content: content,
         aiAnalysis: decryptedResult,
@@ -70,7 +268,7 @@ export default function Home() {
       };
       setCaseList((prev) => [newCaseRecord, ...prev]);
 
-      alert(`성공적으로 사건이 접수되어 1차 AI 분석이 완료되었습니다!`);
+      alert('성공적으로 사건이 접수되어 1차 AI 분석이 완료되었습니다!');
       setReporter('');
       setContent('');
     } catch (error) {
@@ -81,31 +279,26 @@ export default function Home() {
     }
   };
 
-  // ⚠️ 정식 재판 청구 핸들러 (관계 DB 결합 알고리즘 가동 🚀)
   const handleRequestTrial = async () => {
     setIsLoading(true);
     setTrialResult('');
 
     try {
-      // 1. Firebase 'relations' 창고에 쌓인 우리 반 마음 데이터 전부 긁어오기
       const querySnapshot = await getDocs(collection(db, 'relations'));
       const relationsData: any[] = [];
       querySnapshot.forEach((doc) => {
         relationsData.push(doc.data());
       });
 
-      // 2. AI에게 사건 내용과 누적 관계 매트릭스 데이터를 넘겨 재판부 선정 요청
       const encryptedTrialReport = await setupCourtTrial(
         currentEncryptedContent,
         currentEncryptedReporter,
         relationsData
       );
 
-      // 3. AI가 지정해준 배심원단 코드(STU_XX)를 다시 실명으로 번역
       const decryptedTrialReport = await deanonymizeText(encryptedTrialReport || "");
       setTrialResult(decryptedTrialReport);
 
-      // 관리자 목록 최신 사건에 배심원단/재판 결과 업데이트
       setCaseList((prev) =>
         prev.map((c, idx) =>
           idx === 0
@@ -123,7 +316,6 @@ export default function Home() {
     }
   };
 
-  // 🤝 오늘의 마음 & 친구 기록 제출
   const handleFriendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -162,8 +354,6 @@ export default function Home() {
 
   return (
     <main className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 gap-6">
-      
-      {/* [메뉴 선택 화면] */}
       {view === 'menu' && (
         <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8 border border-slate-100 text-center">
           <h1 className="text-3xl font-extrabold text-indigo-600 tracking-tight mb-2">🏛️ ClassCourt-AI</h1>
@@ -192,7 +382,6 @@ export default function Home() {
         </div>
       )}
 
-      {/* [트랙 A: 사건 신고창] */}
       {view === 'report' && (
         <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
           <div className="mb-6 flex justify-between items-center">
@@ -216,7 +405,6 @@ export default function Home() {
         </div>
       )}
 
-      {/* [트랙 B: 오늘의 마음 & 친구 기록창] */}
       {view === 'friend' && (
         <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8 border border-slate-100">
           <div className="mb-6 flex justify-between items-center">
@@ -248,7 +436,6 @@ export default function Home() {
         </div>
       )}
 
-      {/* [트랙 C: 교사 전용 관리자 모드] */}
       {view === 'admin' && (
         <div className="w-full max-w-4xl space-y-4">
           <div className="flex justify-start">
@@ -271,7 +458,6 @@ export default function Home() {
         </div>
       )}
 
-      {/* 1차 AI 배심원 분석 리포트 창 */}
       {aiResult && view === 'report' && (
         <div className="w-full max-w-md bg-emerald-50 rounded-2xl shadow-lg p-6 border border-emerald-100 flex flex-col gap-4">
           <div>
@@ -279,7 +465,6 @@ export default function Home() {
             <div className="text-sm text-emerald-950 whitespace-pre-wrap leading-relaxed">{aiResult}</div>
           </div>
           
-          {/* ⚠️ 불복 및 정식 재판 청구 버튼 */}
           {!trialResult && (
             <button
               onClick={handleRequestTrial}
@@ -292,9 +477,8 @@ export default function Home() {
         </div>
       )}
 
-      {/* 🏛️ 정식 재판부 자동 구성 결과창 */}
       {trialResult && view === 'report' && (
-        <div className="w-full max-w-md bg-indigo-50 rounded-2xl shadow-lg p-6 border border-indigo-100 animate-fade-in">
+        <div className="w-full max-w-md bg-indigo-50 rounded-2xl shadow-lg p-6 border border-indigo-100">
           <h3 className="text-lg font-bold text-indigo-800 mb-3 flex items-center gap-2">🏛️ AI 정식 재판부 매칭 결과</h3>
           <div className="text-sm text-indigo-950 whitespace-pre-wrap leading-relaxed">{trialResult}</div>
         </div>
