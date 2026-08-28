@@ -5,9 +5,10 @@ import { db } from '@/lib/firebase';
 import { collection, addDoc, getDocs, serverTimestamp } from 'firebase/firestore';
 import { analyzeCase, setupCourtTrial } from '@/lib/gemini';
 import { anonymizeText, getStudentIdByName, deanonymizeText } from '@/lib/anonymize';
+import AdminDashboard, { CaseRecord } from '@/components/AdminDashboard';
 
 export default function Home() {
-  const [view, setView] = useState<'menu' | 'report' | 'friend'>('menu');
+  const [view, setView] = useState<'menu' | 'report' | 'friend' | 'admin'>('menu');
   const [isLoading, setIsLoading] = useState(false);
   const [aiResult, setAiResult] = useState('');
   
@@ -26,6 +27,9 @@ export default function Home() {
   const [goodFriends, setGoodFriends] = useState('');
   const [badFriend, setBadFriend] = useState('');
   const [story, setStory] = useState('');
+
+  // 🔒 교사 전용 관리자 모드 사건 목록
+  const [caseList, setCaseList] = useState<CaseRecord[]>([]);
 
   // 🚨 사건 신고 제출
   const handleReportSubmit = async (e: React.FormEvent) => {
@@ -52,6 +56,20 @@ export default function Home() {
       const decryptedResult = await deanonymizeText(encryptedResult || "");
       setAiResult(decryptedResult);
 
+      // 관리자 대시보드 목록에 새 사건 자동 등록
+      const newCaseRecord: CaseRecord = {
+        id: Date.now().toString(),
+        createdAt: new Date().toLocaleString('ko-KR'),
+        plaintiff: reporter,
+        defendant: 'AI 분석 내용 참조',
+        title: content.slice(0, 20) + (content.length > 20 ? '...' : ''),
+        content: content,
+        aiAnalysis: decryptedResult,
+        juryList: [],
+        status: '접수완료',
+      };
+      setCaseList((prev) => [newCaseRecord, ...prev]);
+
       alert(`성공적으로 사건이 접수되어 1차 AI 분석이 완료되었습니다!`);
       setReporter('');
       setContent('');
@@ -69,7 +87,7 @@ export default function Home() {
     setTrialResult('');
 
     try {
-      // 1. Firebase 'relations' 창고에 쌓인 우리 반 마음 데이터 전부 긁어오기!
+      // 1. Firebase 'relations' 창고에 쌓인 우리 반 마음 데이터 전부 긁어오기
       const querySnapshot = await getDocs(collection(db, 'relations'));
       const relationsData: any[] = [];
       querySnapshot.forEach((doc) => {
@@ -83,9 +101,18 @@ export default function Home() {
         relationsData
       );
 
-      // 3. AI가 지정해준 배심원단 코드(STU_XX)를 다시 친숙한 아이들 실명으로 번역! 🔓
+      // 3. AI가 지정해준 배심원단 코드(STU_XX)를 다시 실명으로 번역
       const decryptedTrialReport = await deanonymizeText(encryptedTrialReport || "");
       setTrialResult(decryptedTrialReport);
+
+      // 관리자 목록 최신 사건에 배심원단/재판 결과 업데이트
+      setCaseList((prev) =>
+        prev.map((c, idx) =>
+          idx === 0
+            ? { ...c, aiAnalysis: (c.aiAnalysis || '') + '\n\n[정식 재판부 결과]\n' + decryptedTrialReport, status: '재판진행중' }
+            : c
+        )
+      );
 
       alert('관계 DB 분석을 바탕으로 객관적인 정식 재판부가 구성되었습니다! 🏛️');
     } catch (error) {
@@ -155,6 +182,12 @@ export default function Home() {
             >
               🤝 오늘의 '마음 & 친구' 기록하기
             </button>
+            <button
+              onClick={() => setView('admin')}
+              className="w-full bg-slate-800 hover:bg-slate-900 text-white font-semibold py-3 px-4 rounded-xl shadow transition-all active:scale-[0.98] text-sm mt-2"
+            >
+              🔒 교사 전용 관리자 모드
+            </button>
           </div>
         </div>
       )}
@@ -215,15 +248,38 @@ export default function Home() {
         </div>
       )}
 
+      {/* [트랙 C: 교사 전용 관리자 모드] */}
+      {view === 'admin' && (
+        <div className="w-full max-w-4xl space-y-4">
+          <div className="flex justify-start">
+            <button
+              onClick={() => setView('menu')}
+              className="text-sm font-medium text-slate-600 bg-white border border-slate-200 px-4 py-2 rounded-xl hover:bg-slate-50 shadow-sm"
+            >
+              ◀ 홈 메뉴로 돌아가기
+            </button>
+          </div>
+          <AdminDashboard
+            cases={caseList}
+            onDeleteCase={(id) => setCaseList((prev) => prev.filter((c) => c.id !== id))}
+            onUpdateStatus={(id, status) =>
+              setCaseList((prev) =>
+                prev.map((c) => (c.id === id ? { ...c, status } : c))
+              )
+            }
+          />
+        </div>
+      )}
+
       {/* 1차 AI 배심원 분석 리포트 창 */}
-      {aiResult && (
+      {aiResult && view === 'report' && (
         <div className="w-full max-w-md bg-emerald-50 rounded-2xl shadow-lg p-6 border border-emerald-100 flex flex-col gap-4">
           <div>
             <h3 className="text-lg font-bold text-emerald-800 mb-3 flex items-center gap-2">🤖 AI 배심원의 1차 분석 리포트</h3>
             <div className="text-sm text-emerald-950 whitespace-pre-wrap leading-relaxed">{aiResult}</div>
           </div>
           
-          {/* ⚠️ 불복 및 정식 재판 청구 버튼 (신규 추가 ⭐) */}
+          {/* ⚠️ 불복 및 정식 재판 청구 버튼 */}
           {!trialResult && (
             <button
               onClick={handleRequestTrial}
@@ -236,64 +292,12 @@ export default function Home() {
         </div>
       )}
 
-      {/* 🏛️ 정식 재판부 자동 구성 결과창 (신규 추가 ⭐) */}
-      {trialResult && (
+      {/* 🏛️ 정식 재판부 자동 구성 결과창 */}
+      {trialResult && view === 'report' && (
         <div className="w-full max-w-md bg-indigo-50 rounded-2xl shadow-lg p-6 border border-indigo-100 animate-fade-in">
           <h3 className="text-lg font-bold text-indigo-800 mb-3 flex items-center gap-2">🏛️ AI 정식 재판부 매칭 결과</h3>
           <div className="text-sm text-indigo-950 whitespace-pre-wrap leading-relaxed">{trialResult}</div>
         </div>
-      )}
-    </main>
-  );
-}
-// app/page.tsx 예시
-import { useState } from "react";
-import AdminDashboard, { CaseRecord } from "@/components/AdminDashboard";
-
-export default function Home() {
-  const [activeTab, setActiveTab] = useState<"form" | "admin">("form");
-  const [caseList, setCaseList] = useState<CaseRecord[]>([]);
-
-  // 사건 접수 완료 시 실행되는 핸들러 (기존 사건 접수 함수 내부에서 호출)
-  const handleCaseSubmit = (newCase: CaseRecord) => {
-    setCaseList((prev) => [newCase, ...prev]);
-  };
-
-  return (
-    <main className="min-h-screen p-4 bg-slate-100">
-      {/* 상단 탭 전환 버튼 */}
-      <div className="flex justify-center gap-2 mb-6">
-        <button
-          onClick={() => setActiveTab("form")}
-          className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
-            activeTab === "form" ? "bg-indigo-600 text-white" : "bg-white text-slate-600 border"
-          }`}
-        >
-          ✍️ 사건 접수 (학생용)
-        </button>
-        <button
-          onClick={() => setActiveTab("admin")}
-          className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
-            activeTab === "admin" ? "bg-slate-900 text-white" : "bg-white text-slate-600 border"
-          }`}
-        >
-          🔒 관리자 모드 (교사용)
-        </button>
-      </div>
-
-      {/* 탭에 따른 화면 표시 */}
-      {activeTab === "form" ? (
-        <div>{/* 기존 사건 접수 폼 및 AI 분석 화면 컴포넌트 */}</div>
-      ) : (
-        <AdminDashboard
-          cases={caseList}
-          onDeleteCase={(id) => setCaseList((prev) => prev.filter((c) => c.id !== id))}
-          onUpdateStatus={(id, status) =>
-            setCaseList((prev) =>
-              prev.map((c) => (c.id === id ? { ...c, status } : c))
-            )
-          }
-        />
       )}
     </main>
   );
