@@ -246,3 +246,55 @@ export default function Home() {
     </main>
   );
 }
+// app/page.tsx 예시
+import { useState } from "react";
+import AdminDashboard, { CaseRecord } from "@/components/AdminDashboard";
+
+export default function Home() {
+  const [activeTab, setActiveTab] = useState<"form" | "admin">("form");
+  const [caseList, setCaseList] = useState<CaseRecord[]>([]);
+
+  // 사건 접수 완료 시 실행되는 핸들러 (기존 사건 접수 함수 내부에서 호출)
+  const handleCaseSubmit = (newCase: CaseRecord) => {
+    setCaseList((prev) => [newCase, ...prev]);
+  };
+
+  return (
+    <main className="min-h-screen p-4 bg-slate-100">
+      {/* 상단 탭 전환 버튼 */}
+      <div className="flex justify-center gap-2 mb-6">
+        <button
+          onClick={() => setActiveTab("form")}
+          className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
+            activeTab === "form" ? "bg-indigo-600 text-white" : "bg-white text-slate-600 border"
+          }`}
+        >
+          ✍️ 사건 접수 (학생용)
+        </button>
+        <button
+          onClick={() => setActiveTab("admin")}
+          className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
+            activeTab === "admin" ? "bg-slate-900 text-white" : "bg-white text-slate-600 border"
+          }`}
+        >
+          🔒 관리자 모드 (교사용)
+        </button>
+      </div>
+
+      {/* 탭에 따른 화면 표시 */}
+      {activeTab === "form" ? (
+        <div>{/* 기존 사건 접수 폼 및 AI 분석 화면 컴포넌트 */}</div>
+      ) : (
+        <AdminDashboard
+          cases={caseList}
+          onDeleteCase={(id) => setCaseList((prev) => prev.filter((c) => c.id !== id))}
+          onUpdateStatus={(id, status) =>
+            setCaseList((prev) =>
+              prev.map((c) => (c.id === id ? { ...c, status } : c))
+            )
+          }
+        />
+      )}
+    </main>
+  );
+}
