@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { db } from '@/lib/firebase';
-import { collection, addDoc, getDocs, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, getDocs, serverTimestamp, query, orderBy, deleteDoc, doc, updateDoc } from 'firebase/firestore';
 import { analyzeCase, setupCourtTrial } from '@/lib/gemini';
 import { anonymizeText, getStudentIdByName, deanonymizeText } from '@/lib/anonymize';
 
@@ -19,15 +19,17 @@ export interface CaseRecord {
   status: "접수완료" | "재판진행중" | "판결완료";
 }
 
-// 🔒 관리자 대시보드 컴포넌트 (내장)
+// 🔒 관리자 대시보드 컴포넌트 (Firebase 데이터 연동 완료)
 function AdminDashboard({
   cases,
+  onRefresh,
   onDeleteCase,
   onUpdateStatus,
 }: {
   cases: CaseRecord[];
-  onDeleteCase?: (id: string) => void;
-  onUpdateStatus?: (id: string, status: CaseRecord["status"]) => void;
+  onRefresh: () => void;
+  onDeleteCase: (id: string) => void;
+  onUpdateStatus: (id: string, status: CaseRecord["status"]) => void;
 }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [inputPassword, setInputPassword] = useState("");
@@ -40,6 +42,7 @@ function AdminDashboard({
     if (inputPassword === ADMIN_PIN) {
       setIsAuthenticated(true);
       setInputPassword("");
+      onRefresh(); // 관리자 로그인 시 최신 데이터 불러오기
     } else {
       alert("관리자 비밀번호가 일치하지 않습니다.");
       setInputPassword("");
@@ -84,12 +87,20 @@ function AdminDashboard({
             총 <span className="font-semibold text-indigo-600">{cases.length}</span>건의 사건이 접수되어 있습니다.
           </p>
         </div>
-        <button
-          onClick={() => setIsAuthenticated(false)}
-          className="text-xs text-slate-500 hover:text-slate-800 bg-white border border-slate-300 px-3 py-1.5 rounded-md shadow-sm"
-        >
-          관리자 로그아웃
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={onRefresh}
+            className="text-xs text-indigo-600 hover:text-indigo-800 bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded-md shadow-sm font-medium"
+          >
+            🔄새로고침
+          </button>
+          <button
+            onClick={() => setIsAuthenticated(false)}
+            className="text-xs text-slate-500 hover:text-slate-800 bg-white border border-slate-300 px-3 py-1.5 rounded-md shadow-sm"
+          >
+            로그아웃
+          </button>
+        </div>
       </div>
 
       <div className="overflow-x-auto bg-white rounded-xl border border-slate-200 shadow-sm">
@@ -97,8 +108,8 @@ function AdminDashboard({
           <thead>
             <tr className="bg-slate-100 text-slate-600 border-b border-slate-200">
               <th className="p-3.5 font-semibold">접수일시</th>
-              <th className="p-3.5 font-semibold">신청자</th>
-              <th className="p-3.5 font-semibold">사건 개요</th>
+              <th className="p-3.5 font-semibold">신청자 (원고)</th>
+              <th className="p-3.5 font-semibold">사건 내용 요약</th>
               <th className="p-3.5 font-semibold">상태</th>
               <th className="p-3.5 font-semibold text-center">관리</th>
             </tr>
@@ -107,7 +118,7 @@ function AdminDashboard({
             {cases.length === 0 ? (
               <tr>
                 <td colSpan={5} className="p-8 text-center text-slate-400">
-                  현재 접수된 사건 내역이 없습니다.
+                  현재 접수된 사건 내역이 없습니다. (새로고침을 눌러보세요)
                 </td>
               </tr>
             ) : (
@@ -120,7 +131,6 @@ function AdminDashboard({
                     <select
                       value={item.status}
                       onChange={(e) =>
-                        onUpdateStatus &&
                         onUpdateStatus(item.id, e.target.value as CaseRecord["status"])
                       }
                       className="text-xs bg-slate-100 border border-slate-300 rounded px-2 py-1 font-medium focus:outline-none"
@@ -137,18 +147,16 @@ function AdminDashboard({
                     >
                       상세·AI분석
                     </button>
-                    {onDeleteCase && (
-                      <button
-                        onClick={() => {
-                          if (confirm("정말 이 사건을 삭제하시겠습니까?")) {
-                            onDeleteCase(item.id);
-                          }
-                        }}
-                        className="px-2 py-1 text-xs text-rose-500 hover:bg-rose-50 rounded transition"
-                      >
-                        삭제
-                      </button>
-                    )}
+                    <button
+                      onClick={() => {
+                        if (confirm("정말 이 사건을 삭제하시겠습니까?")) {
+                          onDeleteCase(item.id);
+                        }
+                      }}
+                      className="px-2 py-1 text-xs text-rose-500 hover:bg-rose-50 rounded transition"
+                    >
+                      삭제
+                    </button>
                   </td>
                 </tr>
               ))
@@ -178,12 +186,12 @@ function AdminDashboard({
             </div>
 
             <div className="text-sm bg-slate-50 p-3.5 rounded-xl space-y-1">
-              <p><strong>신청 학생:</strong> {selectedCase.plaintiff}</p>
+              <p><strong>신청 학생 코드:</strong> {selectedCase.plaintiff}</p>
               <p className="text-slate-500 text-xs mt-2"><strong>접수 일시:</strong> {selectedCase.createdAt}</p>
             </div>
 
             <div className="space-y-1">
-              <h4 className="text-xs font-bold text-slate-500 uppercase">사건 내용</h4>
+              <h4 className="text-xs font-bold text-slate-500 uppercase">사건 원문 내용</h4>
               <p className="text-sm text-slate-700 whitespace-pre-wrap bg-slate-50 p-3 rounded-xl border border-slate-100">
                 {selectedCase.content}
               </p>
@@ -221,6 +229,7 @@ export default function Home() {
   const [trialResult, setTrialResult] = useState('');
   const [currentEncryptedContent, setCurrentEncryptedContent] = useState('');
   const [currentEncryptedReporter, setCurrentEncryptedReporter] = useState('');
+  const [currentDocId, setCurrentDocId] = useState(''); // Firestore 문서 ID 보관용
 
   const [reporter, setReporter] = useState('');
   const [content, setContent] = useState('');
@@ -232,6 +241,41 @@ export default function Home() {
 
   const [caseList, setCaseList] = useState<CaseRecord[]>([]);
 
+  // 🔄 Firebase에서 사건 목록 불러오기 함수
+  const fetchCasesFromFirestore = async () => {
+    try {
+      const q = query(collection(db, 'cases'), orderBy('createdAt', 'desc'));
+      const querySnapshot = await getDocs(q);
+      const loadedCases: CaseRecord[] = [];
+      
+      querySnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        loadedCases.push({
+          id: docSnap.id,
+          createdAt: data.createdAt?.toDate ? data.createdAt.toDate().toLocaleString('ko-KR') : '방금 전',
+          plaintiff: data.studentName || '익명',
+          defendant: '관계 DB 참조',
+          title: data.content ? data.content.slice(0, 25) + '...' : '제목 없음',
+          content: data.content || '',
+          aiAnalysis: data.aiAnalysis || '아직 1차 분석 전이거나 저장되지 않음',
+          status: data.status || '접수완료',
+        });
+      });
+
+      setCaseList(loadedCases);
+    } catch (error) {
+      console.error("사건 불러오기 실패:", error);
+    }
+  };
+
+  // 관리자 모드 진입 시 자동 로드
+  useEffect(() => {
+    if (view === 'admin') {
+      fetchCasesFromFirestore();
+    }
+  }, [view]);
+
+  // 🚨 사건 신고 제출
   const handleReportSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -245,28 +289,20 @@ export default function Home() {
       setCurrentEncryptedReporter(encryptedReporter);
       setCurrentEncryptedContent(encryptedContent);
 
-      await addDoc(collection(db, 'cases'), {
-        studentName: encryptedReporter,
-        content: encryptedContent,
-        createdAt: serverTimestamp(),
-      });
-
       const encryptedResult = await analyzeCase(encryptedContent);
       const decryptedResult = await deanonymizeText(encryptedResult || "");
       setAiResult(decryptedResult);
 
-      const newCaseRecord: CaseRecord = {
-        id: Date.now().toString(),
-        createdAt: new Date().toLocaleString('ko-KR'),
-        plaintiff: reporter,
-        defendant: '분석 내용 참조',
-        title: content.slice(0, 20) + (content.length > 20 ? '...' : ''),
-        content: content,
+      // Firestore에 1차 분석 결과와 상태까지 함께 저장!
+      const docRef = await addDoc(collection(db, 'cases'), {
+        studentName: encryptedReporter,
+        content: encryptedContent,
         aiAnalysis: decryptedResult,
-        juryList: [],
         status: '접수완료',
-      };
-      setCaseList((prev) => [newCaseRecord, ...prev]);
+        createdAt: serverTimestamp(),
+      });
+
+      setCurrentDocId(docRef.id);
 
       alert('성공적으로 사건이 접수되어 1차 AI 분석이 완료되었습니다!');
       setReporter('');
@@ -279,6 +315,7 @@ export default function Home() {
     }
   };
 
+  // ⚠️ 정식 재판 청구 핸들러
   const handleRequestTrial = async () => {
     setIsLoading(true);
     setTrialResult('');
@@ -299,13 +336,14 @@ export default function Home() {
       const decryptedTrialReport = await deanonymizeText(encryptedTrialReport || "");
       setTrialResult(decryptedTrialReport);
 
-      setCaseList((prev) =>
-        prev.map((c, idx) =>
-          idx === 0
-            ? { ...c, aiAnalysis: (c.aiAnalysis || '') + '\n\n[정식 재판부 결과]\n' + decryptedTrialReport, status: '재판진행중' }
-            : c
-        )
-      );
+      // 만약 방금 접수한 문서 ID가 있다면 Firestore에 재판 결과 업데이트
+      if (currentDocId) {
+        const docRef = doc(db, 'cases', currentDocId);
+        await updateDoc(docRef, {
+          aiAnalysis: `[1차 분석 리포트]\n${aiResult}\n\n[정식 재판부 결과]\n${decryptedTrialReport}`,
+          status: '재판진행중',
+        });
+      }
 
       alert('관계 DB 분석을 바탕으로 객관적인 정식 재판부가 구성되었습니다! 🏛️');
     } catch (error) {
@@ -316,6 +354,7 @@ export default function Home() {
     }
   };
 
+  // 🤝 오늘의 마음 & 친구 기록 제출
   const handleFriendSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -349,6 +388,32 @@ export default function Home() {
       alert('기록 중 오류가 발생했습니다.');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // 🗑️ 관리자: 사건 삭제
+  const handleDeleteCase = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'cases', id));
+      setCaseList((prev) => prev.filter((c) => c.id !== id));
+      alert("사건이 삭제되었습니다.");
+    } catch (error) {
+      console.error("삭제 실패:", error);
+      alert("삭제 중 오류가 발생했습니다.");
+    }
+  };
+
+  // ⚙️ 관리자: 사건 상태 변경
+  const handleUpdateStatus = async (id: string, status: CaseRecord["status"]) => {
+    try {
+      const docRef = doc(db, 'cases', id);
+      await updateDoc(docRef, { status });
+      setCaseList((prev) =>
+        prev.map((c) => (c.id === id ? { ...c, status } : c))
+      );
+    } catch (error) {
+      console.error("상태 변경 실패:", error);
+      alert("상태 변경 중 오류가 발생했습니다.");
     }
   };
 
@@ -448,12 +513,9 @@ export default function Home() {
           </div>
           <AdminDashboard
             cases={caseList}
-            onDeleteCase={(id) => setCaseList((prev) => prev.filter((c) => c.id !== id))}
-            onUpdateStatus={(id, status) =>
-              setCaseList((prev) =>
-                prev.map((c) => (c.id === id ? { ...c, status } : c))
-              )
-            }
+            onRefresh={fetchCasesFromFirestore}
+            onDeleteCase={handleDeleteCase}
+            onUpdateStatus={handleUpdateStatus}
           />
         </div>
       )}
